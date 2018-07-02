@@ -16,22 +16,26 @@ void check_error(int ret, std::string err_string)
     }
 }
 
+/* Create and send a task to the GPU */
 struct Task {
     private:
+        int id_;
         bool offloadable_;
         std::string name_;
         void function () {
             std::cout << "CPU task executing" << std::endl;
         }
     public:
-        Task(bool offloadable, std::string name) {
+        Task(int id, bool offloadable, std::string name) {
+            id_ = id;
             offloadable_ = offloadable;
             name_ = name;
         }
-        bool operator()(int i) {
+        bool operator()() {
             if (offloadable_) {
-                std::cout << "Sending computation to task " << i << " on a GPU-provided machine" << std::endl;
-                int ret = MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, i, i, MPI_COMM_WORLD);
+                std::cout << "Sending computation to task " << id_ << " on a GPU-provided machine" << std::endl;
+                // FIXME it should be possible for the tag to be zero
+                int ret = MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, id_, id_, MPI_COMM_WORLD);
                 check_error(ret, "Error in MPI_Send, mpi_id 0");
                 return true;
             } else {
@@ -62,12 +66,12 @@ int main(int argc, char *argv[])
     if (mpi_id == 0) { // I am the one that offloads tasks
 
         std::vector<Task> tasks;
-        tasks.push_back(Task(false, "binary_search"));
-        tasks.push_back(Task(true, "matr_mul"));
-        tasks.push_back(Task(true, "conv"));
-        tasks.push_back(Task(true, "riemann"));
+        tasks.push_back(Task(0, false, "binary_search"));
+        tasks.push_back(Task(1, true, "matr_mul"));
+        tasks.push_back(Task(2, true, "conv"));
+        tasks.push_back(Task(3, true, "riemann"));
 
-        tbb::parallel_for_each(tasks.begin(), tasks.end(), [&](Task &t) { static int i = 0; t(i); i++; } );
+        tbb::parallel_for_each(tasks.begin(), tasks.end(), [&](Task &t) { t(); } );
     } else { // GPU machines
         std::cout << "Machine " << mpi_id << " waiting for tasks..." << std::endl;
 
@@ -84,11 +88,11 @@ int main(int argc, char *argv[])
 
         char *rec_buf = new char[count];
         // Terrible, terrible hack in the next row
+        // FIXME it should be possible for the tag to be zero
         ret = MPI_Irecv(static_cast<void *>(rec_buf), count, MPI_CHAR, 0, mpi_id, MPI_COMM_WORLD, &request);
         check_error(ret, "Error in MPI_Recv, mpi_id 0");
         std::cout << "Received work " << rec_buf << ", processing" << std::endl;
     }
-
 
     ret = MPI_Finalize();
     check_error(ret, "Error in MPI_Finalize");
