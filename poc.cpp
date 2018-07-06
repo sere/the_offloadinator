@@ -92,10 +92,11 @@ struct Consumer {
 
             int count;
             MPI_Status status;
+            MPI_Message message;
 
             while (id_ == 0) {
                 std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " probing for work " << std::endl;
-                MPI_Probe(MPI_MASTER_THREAD, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+                MPI_Mprobe(MPI_MASTER_THREAD, MPI_ANY_TAG, MPI_COMM_WORLD, &message, &status);
                 std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " probed tag " << status.MPI_TAG << ", node " << status.MPI_SOURCE << std::endl;
 
                 if (status.MPI_TAG == DIETAG) {
@@ -106,7 +107,7 @@ struct Consumer {
                 MPI_Get_count(&status, MPI_CHAR, &count);
 
                 char *rec_buf = new char[count];
-                MPI_Recv(static_cast<void *>(rec_buf), count, MPI_CHAR, status.MPI_SOURCE, status.MPI_TAG, MPI_COMM_WORLD, &status);
+                MPI_Mrecv(static_cast<void *>(rec_buf), count, MPI_CHAR, &message, &status);
                 std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " received work " << rec_buf << " from " << status.MPI_SOURCE << std::endl;
                 MPI_Send(0, 0, MPI_INT, status.MPI_SOURCE, status.MPI_TAG, MPI_COMM_WORLD);
                 std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " sent answer to node " << status.MPI_SOURCE << " tag " << status.MPI_TAG << std::endl;
