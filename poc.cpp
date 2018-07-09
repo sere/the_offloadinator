@@ -39,7 +39,7 @@ class Scheduler
 Scheduler *scheduler;
 
 /* Create and send a task to the GPU */
-struct Task {
+struct Producer {
     private:
         int id_;
         bool offloadable_;
@@ -49,7 +49,7 @@ struct Task {
             std::cout << "CPU task executing" << std::endl;
         }
     public:
-        Task(int id, bool offloadable, std::string name) {
+        Producer(int id, bool offloadable, std::string name) {
             id_ = id;
             offloadable_ = offloadable;
             name_ = name;
@@ -77,13 +77,13 @@ struct Task {
         }
 };
 
-struct Receiver {
+struct Consumer {
     private:
         int id_;
         int pool_size_;
         int mpi_id_;
     public:
-        Receiver(int id, int pool_size, int mpi_id) {
+        Consumer(int id, int pool_size, int mpi_id) {
             id_ = id;
             pool_size_ = pool_size;
             mpi_id_ = mpi_id;
@@ -135,30 +135,29 @@ int main(int argc, char *argv[])
 
         tbb::mutex m;
 
-        std::vector<Task> tasks;
-        // FIXME needs a nr of GPU tasks equal to the nr of mpi * tbb tasks
-        tasks.push_back(Task(0, true, "binary_search"));
-        tasks.push_back(Task(1, true, "matr_mul"));
-        //tasks.push_back(Task(2, true, "conv"));
-        //tasks.push_back(Task(3, true, "riemann"));
+        std::vector<Producer> producers;
+        producers.push_back(Producer(0, true, "binary_search"));
+        producers.push_back(Producer(1, true, "matr_mul"));
+        //producers.push_back(Producer(2, true, "conv"));
+        //producers.push_back(Producer(3, true, "riemann"));
 
-        tbb::parallel_for_each(tasks.begin(), tasks.end(), [&](Task &t) { t(m); } );
+        tbb::parallel_for_each(producers.begin(), producers.end(), [&](Producer &p) { p(m); } );
         std::cout << "MST: Exited from tbb::parallel_for_each" << std::endl;
 
-        // Now stop all the GPU machines
+        // Now stop all the GPU nodes
 
         for(int i = 0; i < mpi_rank - 1; i++) {
             std::cout << "MST: Send exit tag to " << i << std::endl;
             MPI_Send(0, 0, MPI_INT, i, DIETAG, MPI_COMM_WORLD);
         }
 
-    } else { // GPU machines - consumers
+    } else { // GPU nodes - consumers
 
-        std::vector<Receiver> receivers;
-        receivers.push_back(Receiver(0, 2, mpi_id));
-        receivers.push_back(Receiver(1, 2, mpi_id));
+        std::vector<Consumer> consumers;
+        consumers.push_back(Consumer(0, 2, mpi_id));
+        consumers.push_back(Consumer(1, 2, mpi_id));
 
-        tbb::parallel_for_each(receivers.begin(), receivers.end(), [&](Receiver &r) { r(); } );
+        tbb::parallel_for_each(consumers.begin(), consumers.end(), [&](Consumer &c) { c(); } );
     }
 
     MPI_Finalize();
