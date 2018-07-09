@@ -8,6 +8,10 @@
 #include <tbb/tbb.h>
 #include <unistd.h>
 #include <vector>
+#include <stack>
+
+const int DIETAG = 2048;
+const int WORKTAG = 1024;
 
 int MPI_MASTER_THREAD;
 
@@ -18,6 +22,29 @@ void check_error(int ret, std::string err_string)
         exit(1);
     }
 }
+
+class Scheduler
+{
+    private:
+        int nprocs_;
+        std::stack<int> gpu_machines_;
+        tbb::mutex m_;
+    public:
+        Scheduler(int nprocs) {
+            nprocs_ = nprocs;
+            gpu_machines_.push(1);
+            gpu_machines_.push(0);
+        }
+        int get_id() {
+            m_.lock();
+            int tmp = gpu_machines_.top();
+            gpu_machines_.pop();
+            m_.unlock();
+            return tmp;
+        }
+};
+
+Scheduler *scheduler;
 
 /* Create and send a task to the GPU */
 struct Task {
@@ -35,12 +62,23 @@ struct Task {
             offloadable_ = offloadable;
             name_ = name;
         }
-        bool operator()() {
+        bool operator()(tbb::mutex &m) {
             if (offloadable_) {
-                std::cout << "Sending computation to task " << id_ << " on a GPU-provided machine" << std::endl;
-                // FIXME id_/2 is a workaround; do instead: int gpu_tag = scheduler.get_tag() somewhere
-                int ret = MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, id_/2, id_, MPI_COMM_WORLD);
-                check_error(ret, "Error in MPI_Send, mpi_id 0");
+                m.lock();
+                int gpu_pe = scheduler->get_id();
+                m.unlock();
+
+                std::cout << std::string(2*(id_ + 1), '\t') << "MST " << id_ << ": Sending " << name_ << " to node " << gpu_pe << std::endl;
+                int ret = MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, gpu_pe, WORKTAG + id_, MPI_COMM_WORLD);
+                std::cout << std::string(2*(id_ + 1), '\t') << "MST " << id_ << ": Sent " << name_ << " to node " << gpu_pe << " tag " << WORKTAG + id_ << std::endl;
+                check_error(ret, "Error in MPI_Send, master thread");
+
+                MPI_Status status;
+                ret = MPI_Recv(0, 0, MPI_INT, gpu_pe, WORKTAG + id_, MPI_COMM_WORLD, &status);
+                std::cout << std::string(2*(id_ + 1), '\t') << "MST " << id_ << ": Received answer from " << gpu_pe << " tag " << WORKTAG + id_ << std::endl;
+                check_error(ret, "Error in MPI_Recv, master thread");
+
+                /* do other work */
                 return true;
             } else {
                 function();
@@ -67,17 +105,28 @@ struct Receiver {
             MPI_Request request;
             int abs_id = mpi_id_ * pool_size_ + id_;
 
-            std::cout << "Task " << id_ << " on machine " << mpi_id_ << ", absolute id " << abs_id << " waiting for tasks..." << std::endl;
-            ret = MPI_Probe(MPI_MASTER_THREAD, abs_id , MPI_COMM_WORLD, &status);
-            check_error(ret, "Error in MPI_Probe, abs_id " + abs_id);
-            std::cout << "abs_id: " << abs_id << std::endl;
-            ret = MPI_Get_count(&status, MPI_CHAR, &count);
-            check_error(ret, "Error in MPI_Get_count, abs_id" + abs_id);
+            while (id_ == 0) {
+                std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " probing for work " << std::endl;
+                ret = MPI_Probe(MPI_MASTER_THREAD, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+                check_error(ret, "Error in MPI_Probe, abs_id " + abs_id);
+                std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " probed for tag " << status.MPI_TAG << ", node " << status.MPI_SOURCE << std::endl;
 
-            char *rec_buf = new char[count];
-            ret = MPI_Irecv(static_cast<void *>(rec_buf), count, MPI_CHAR, MPI_MASTER_THREAD, abs_id, MPI_COMM_WORLD, &request);
-            check_error(ret, "Error in MPI_Recv, abs_id " + abs_id);
-            std::cout << "Received work " << rec_buf << ", processing" << std::endl;
+                if (status.MPI_TAG == DIETAG) {
+                    std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " exiting " << std::endl;
+                    return;
+                }
+
+                ret = MPI_Get_count(&status, MPI_CHAR, &count);
+                check_error(ret, "Error in MPI_Get_count, abs_id" + abs_id);
+
+                char *rec_buf = new char[count];
+                ret = MPI_Recv(static_cast<void *>(rec_buf), count, MPI_CHAR, status.MPI_SOURCE, status.MPI_TAG, MPI_COMM_WORLD, &status);
+                check_error(ret, "Error in MPI_Recv, abs_id " + abs_id);
+
+                std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " received work " << rec_buf << " from " << status.MPI_SOURCE << std::endl;
+                MPI_Send(0, 0, MPI_INT, status.MPI_SOURCE, status.MPI_TAG, MPI_COMM_WORLD);
+                std::cout << std::string(mpi_id_, '\t') << "SLAVE " << mpi_id_ << " sent answer to node " << status.MPI_SOURCE << " tag " << status.MPI_TAG << std::endl;
+            }
       }
 };
 
@@ -100,19 +149,30 @@ int main(int argc, char *argv[])
     MPI_Get_processor_name(hostname, &hostname_len);
 
     MPI_MASTER_THREAD = mpi_rank - 1;
+    scheduler = new Scheduler(mpi_rank);
 
-    if (mpi_id == MPI_MASTER_THREAD) { // I am the one that offloads tasks
+    if (mpi_id == MPI_MASTER_THREAD) { // Producer
+
+        tbb::mutex m;
 
         std::vector<Task> tasks;
         // FIXME needs a nr of GPU tasks equal to the nr of mpi * tbb tasks
         tasks.push_back(Task(0, true, "binary_search"));
         tasks.push_back(Task(1, true, "matr_mul"));
-        tasks.push_back(Task(2, true, "conv"));
-        tasks.push_back(Task(3, true, "riemann"));
+        //tasks.push_back(Task(2, true, "conv"));
+        //tasks.push_back(Task(3, true, "riemann"));
 
-        tbb::parallel_for_each(tasks.begin(), tasks.end(), [&](Task &t) { t(); } );
+        tbb::parallel_for_each(tasks.begin(), tasks.end(), [&](Task &t) { t(m); } );
+        std::cout << "MST: Exited from tbb::parallel_for_each" << std::endl;
 
-    } else { // GPU machines
+        // Now stop all the GPU machines
+
+        for(int i = 0; i < mpi_rank - 1; i++) {
+            std::cout << "MST: Send exit tag to " << i << std::endl;
+            MPI_Send(0, 0, MPI_INT, i, DIETAG, MPI_COMM_WORLD);
+        }
+
+    } else { // GPU machines - consumers
 
         std::vector<Receiver> receivers;
         receivers.push_back(Receiver(0, 2, mpi_id));
