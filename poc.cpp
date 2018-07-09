@@ -119,10 +119,11 @@ int main(int argc, char *argv[])
     // initialization
     tbb::task_scheduler_init init();
 
+    int provided;
     int mpi_rank, mpi_id, hostname_len;
     char hostname[MPI_MAX_PROCESSOR_NAME];
 
-    MPI_Init(&argc, &argv);
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
 
     MPI_Comm_size(MPI_COMM_WORLD, &mpi_rank);
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_id);
