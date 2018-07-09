@@ -4,4 +4,7 @@ poc: poc.cpp
 run:
 	mpirun -np 3 build/poc
 
-.PHONY: run
+dbg:
+	mpirun -np 3 xterm -e gdb build/poc
+
+.PHONY: run dbg
