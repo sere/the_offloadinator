@@ -53,11 +53,9 @@ struct Producer {
         offloadable_ = offloadable;
         name_ = name;
     }
-    bool operator()(tbb::mutex &m) {
+    bool operator()() {
         if (offloadable_) {
-            m.lock();
             int gpu_pe = scheduler->get_id();
-            m.unlock();
 
             std::cout << std::string(2 * (id_ + 1), '\t') << "MST " << id_
                       << ": Sending " << name_ << " to node " << gpu_pe
@@ -153,8 +151,6 @@ int main(int argc, char *argv[]) {
 
     if (mpi_id == MPI_MASTER_THREAD) { // Producer
 
-        tbb::mutex m;
-
         std::vector<Producer> producers;
         producers.push_back(Producer(0, true, "binary_search"));
         producers.push_back(Producer(1, true, "matr_mul"));
@@ -162,7 +158,7 @@ int main(int argc, char *argv[]) {
         // producers.push_back(Producer(3, true, "riemann"));
 
         tbb::parallel_for_each(producers.begin(), producers.end(),
-                               [&](Producer &p) { p(m); });
+                               [&](Producer &p) { p(); });
         std::cout << "MST: Exited from tbb::parallel_for_each" << std::endl;
 
         // Now stop all the GPU nodes
