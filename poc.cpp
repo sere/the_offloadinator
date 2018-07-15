@@ -146,6 +146,11 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_id);
     MPI_Get_processor_name(hostname, &hostname_len);
 
+    if (mpi_rank < 2) {
+        std::cout << "Too few mpi nodes specified, exiting" << std::endl;
+        goto err;
+    }
+
     MPI_MASTER_THREAD = mpi_rank - 1;
     scheduler = new Scheduler(mpi_rank);
 
@@ -178,5 +183,6 @@ int main(int argc, char *argv[]) {
                                [&](Consumer &c) { c(); });
     }
 
+err:
     MPI_Finalize();
 }
