@@ -17,18 +17,22 @@ int MPI_MASTER_THREAD;
 
 class Scheduler {
   private:
-    int nprocs_;
+    int n_gpu_nodes_;
     std::stack<int> gpu_machines_;
     tbb::mutex m_;
 
   public:
-    Scheduler(int nprocs) {
-        nprocs_ = nprocs;
-        gpu_machines_.push(1);
-        gpu_machines_.push(0);
+    Scheduler(int n_gpu_nodes) {
+        n_gpu_nodes_ = n_gpu_nodes;
+        // TODO make this choice random
+        for (int i = n_gpu_nodes_ - 1; i >= 0; i--) {
+            std::cout << i << std::endl;
+            gpu_machines_.push(i);
+        }
     }
     int get_id() {
         m_.lock();
+        // FIXME check behaviour of top() when the queue is empty
         int tmp = gpu_machines_.top();
         gpu_machines_.pop();
         m_.unlock();
@@ -152,9 +156,10 @@ int main(int argc, char *argv[]) {
     }
 
     MPI_MASTER_THREAD = mpi_rank - 1;
-    scheduler = new Scheduler(mpi_rank);
 
     if (mpi_id == MPI_MASTER_THREAD) { // Producer
+
+        scheduler = new Scheduler(mpi_rank - 1);
 
         std::vector<Producer> producers;
         producers.push_back(Producer(0, true, "binary_search"));
