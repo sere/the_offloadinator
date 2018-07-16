@@ -1,10 +1,11 @@
 poc: poc.cpp
-	mpiCC -ltbb -Wall -Wextra -Wshadow -Wnon-virtual-dtor -pedantic poc.cpp -o build/poc
+	mkdir -p build
+	mpiCC -ltbb -Wall -Wextra -Wshadow -Wnon-virtual-dtor -pedantic -g poc.cpp -o build/poc
 
 run:
-	mpirun -np 3 build/poc
+	mpirun -n 3 build/poc
 
 dbg:
-	mpirun -np 3 xterm -e gdb build/poc
+	mpirun -n 3 xterm -e gdb build/poc
 
 .PHONY: run dbg
