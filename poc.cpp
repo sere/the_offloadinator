@@ -26,17 +26,25 @@ class Scheduler {
         n_gpu_nodes_ = n_gpu_nodes;
         // TODO make this choice random
         for (int i = n_gpu_nodes_ - 1; i >= 0; i--) {
-            std::cout << i << std::endl;
             gpu_machines_.push(i);
         }
     }
-    int get_id() {
-        m_.lock();
-        // FIXME check behaviour of top() when the queue is empty
-        int tmp = gpu_machines_.top();
-        gpu_machines_.pop();
-        m_.unlock();
+    int use_node() {
+        int tmp = -1;
+        while (tmp == -1) {
+            m_.lock();
+            if (!gpu_machines_.empty()) {
+                tmp = gpu_machines_.top();
+                gpu_machines_.pop();
+            }
+            m_.unlock();
+        }
         return tmp;
+    }
+    void free_node(int node) {
+        m_.lock();
+        gpu_machines_.push(node);
+        m_.unlock();
     }
 };
 
@@ -59,7 +67,7 @@ struct Producer {
     }
     bool operator()() {
         if (offloadable_) {
-            int gpu_pe = scheduler->get_id();
+            int gpu_pe = scheduler->use_node();
 
             std::cout << std::string(2 * (id_ + 1), '\t') << "MST " << id_
                       << ": Sending " << name_ << " to node " << gpu_pe
@@ -78,6 +86,8 @@ struct Producer {
                       << WORKTAG + id_ << std::endl;
 
             /* do other work */
+
+            scheduler->free_node(gpu_pe);
             return true;
         } else {
             function();
@@ -164,8 +174,8 @@ int main(int argc, char *argv[]) {
         std::vector<Producer> producers;
         producers.push_back(Producer(0, true, "binary_search"));
         producers.push_back(Producer(1, true, "matr_mul"));
-        // producers.push_back(Producer(2, true, "conv"));
-        // producers.push_back(Producer(3, true, "riemann"));
+        producers.push_back(Producer(2, true, "conv"));
+        producers.push_back(Producer(3, true, "riemann"));
 
         tbb::parallel_for_each(producers.begin(), producers.end(),
                                [&](Producer &p) { p(); });
