@@ -6,6 +6,6 @@ run:
 	mpirun -n 3 build/poc
 
 dbg:
-	mpirun -n 3 xterm -e gdb build/poc
+	mpirun -n 5 -oversubscribe xterm -e gdb build/poc
 
 .PHONY: run dbg
