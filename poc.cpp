@@ -108,8 +108,8 @@ class Scheduler {
 
 Scheduler *scheduler;
 
-/* Create and send a task to the GPU */
-struct Producer {
+/* Create and send a task to a Worker */
+struct Offloader {
   private:
     int id_;
     int mpi_id_;
@@ -119,7 +119,7 @@ struct Producer {
     void function() {
         std::cout << "\t"
                   << "CPU " << mpi_id_ << "-" << id_
-                  << ": task executing on CPU" << std::endl;
+                  << ": task executing on offloader" << std::endl;
     }
     int get_node() {
         int node;
@@ -138,7 +138,7 @@ struct Producer {
     }
 
   public:
-    Producer(int id, int mpi_id, bool offloadable, std::string name) {
+    Offloader(int id, int mpi_id, bool offloadable, std::string name) {
         id_ = id;
         mpi_id_ = mpi_id;
         offloadable_ = offloadable;
@@ -185,7 +185,7 @@ struct Producer {
     }
 };
 
-struct Consumer {
+struct Worker {
   private:
     int id_;
     int pool_size_;
@@ -210,7 +210,7 @@ struct Consumer {
     }
 
   public:
-    Consumer(int id, int pool_size, int mpi_id) {
+    Worker(int id, int pool_size, int mpi_id) {
         id_ = id;
         pool_size_ = pool_size;
         mpi_id_ = mpi_id;
@@ -290,7 +290,7 @@ int main(int argc, char *argv[]) {
 
     MPI_SCHEDULER = mpi_rank - 1;
     MPI_MASTER_THREAD = mpi_rank - 2;
-    MPI_FIRST_CPU = mpi_rank / 2; // TODO
+    MPI_FIRST_CPU = mpi_rank / 2; // arbitrary value
 
     MPI_Group world_group;
     MPI_Comm_group(MPI_COMM_WORLD, &world_group);
@@ -322,16 +322,16 @@ int main(int argc, char *argv[]) {
         scheduler = new Scheduler(MPI_FIRST_CPU);
         scheduler->manage_connections();
 
-    } else if (mpi_id >= MPI_FIRST_CPU) { // Producer
+    } else if (mpi_id >= MPI_FIRST_CPU) { // offloader nodes
 
-        std::vector<Producer> producers;
-        producers.push_back(Producer(0, mpi_id, true, "binary_search"));
-        producers.push_back(Producer(1, mpi_id, true, "matr_mul"));
-        producers.push_back(Producer(2, mpi_id, true, "conv"));
-        producers.push_back(Producer(3, mpi_id, true, "riemann"));
+        std::vector<Offloader> offloaders;
+        offloaders.push_back(Offloader(0, mpi_id, true, "binary_search"));
+        offloaders.push_back(Offloader(1, mpi_id, true, "matr_mul"));
+        offloaders.push_back(Offloader(2, mpi_id, true, "conv"));
+        offloaders.push_back(Offloader(3, mpi_id, true, "riemann"));
 
-        tbb::parallel_for_each(producers.begin(), producers.end(),
-                               [&](Producer &p) { p(); });
+        tbb::parallel_for_each(offloaders.begin(), offloaders.end(),
+                               [&](Offloader &p) { p(); });
 
         MPI_Barrier(CPU_comm);
         // Now stop all the GPU nodes
@@ -350,14 +350,14 @@ int main(int argc, char *argv[]) {
             MPI_Send(0, 0, MPI_INT, MPI_SCHEDULER, SCHED_DIE, MPI_COMM_WORLD);
         }
 
-    } else { // GPU nodes - consumers
+    } else { // worker nodes
 
-        std::vector<Consumer> consumers;
-        consumers.push_back(Consumer(0, 2, mpi_id));
-        consumers.push_back(Consumer(1, 2, mpi_id));
+        std::vector<Worker> workers;
+        workers.push_back(Worker(0, 2, mpi_id));
+        workers.push_back(Worker(1, 2, mpi_id));
 
-        tbb::parallel_for_each(consumers.begin(), consumers.end(),
-                               [&](Consumer &c) { c(); });
+        tbb::parallel_for_each(workers.begin(), workers.end(),
+                               [&](Worker &c) { c(); });
     }
 
 err:
