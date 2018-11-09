@@ -22,7 +22,7 @@ const int SCHED_DIE = DIETAG;
 
 int MPI_MASTER_THREAD;
 int MPI_SCHEDULER;
-int MPI_FIRST_CPU;
+int MPI_FIRST_OFF;
 
 class Scheduler {
   private:
@@ -118,7 +118,7 @@ struct Offloader {
 
     void function() {
         std::cout << "\t"
-                  << "CPU " << mpi_id_ << "-" << id_
+                  << "OFF " << mpi_id_ << "-" << id_
                   << ": task executing on offloader" << std::endl;
     }
     int get_node() {
@@ -127,12 +127,12 @@ struct Offloader {
         MPI_Send(NULL, 0, MPI_INT, MPI_SCHEDULER, SCHED_REQ + id_,
                  MPI_COMM_WORLD);
         std::cout << "\t"
-                  << "CPU " << mpi_id_ << "-" << id_
+                  << "OFF " << mpi_id_ << "-" << id_
                   << ": Sent request for worker node to scheduler " << std::endl;
         MPI_Recv(&node, 1, MPI_INT, MPI_SCHEDULER, SCHED_REQ + id_,
                  MPI_COMM_WORLD, &status);
         std::cout << "\t"
-                  << "CPU " << mpi_id_ << "-" << id_ << ": Received node "
+                  << "OFF " << mpi_id_ << "-" << id_ << ": Received node "
                   << node << " from scheduler " << std::endl;
         return node;
     }
@@ -151,19 +151,19 @@ struct Offloader {
 
             if (wrk_pe == -1) { // No Worker is available right now
                 std::cout << "\t"
-                          << "CPU " << mpi_id_ << "-" << id_
-                          << ": No Worker available, executing task on CPU"
+                          << "OFF " << mpi_id_ << "-" << id_
+                          << ": No Worker available, execute task on Offloader"
                           << std::endl;
                 function();
                 return false;
             }
             std::cout << "\t"
-                      << "CPU " << mpi_id_ << "-" << id_ << ": Sending "
+                      << "OFF " << mpi_id_ << "-" << id_ << ": Sending "
                       << name_ << " to node " << wrk_pe << std::endl;
             MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, wrk_pe,
                      WORKTAG + id_ * 4 + mpi_id_, MPI_COMM_WORLD);
             std::cout << "\t"
-                      << "CPU " << mpi_id_ << "-" << id_ << ": Sent " << name_
+                      << "OFF " << mpi_id_ << "-" << id_ << ": Sent " << name_
                       << " to node " << wrk_pe << " tag " << WORKTAG + id_
                       << std::endl;
 
@@ -171,7 +171,7 @@ struct Offloader {
             MPI_Recv(0, 0, MPI_INT, wrk_pe, WORKTAG + id_ * 4 + mpi_id_,
                      MPI_COMM_WORLD, &status);
             std::cout << "\t"
-                      << "CPU " << mpi_id_ << "-" << id_
+                      << "OFF " << mpi_id_ << "-" << id_
                       << ": Received answer from " << wrk_pe << " tag "
                       << WORKTAG + id_ << std::endl;
 
@@ -290,39 +290,39 @@ int main(int argc, char *argv[]) {
 
     MPI_SCHEDULER = mpi_rank - 1;
     MPI_MASTER_THREAD = mpi_rank - 2;
-    MPI_FIRST_CPU = mpi_rank / 2; // arbitrary value
+    MPI_FIRST_OFF = mpi_rank / 2; // arbitrary value
 
     MPI_Group world_group;
     MPI_Comm_group(MPI_COMM_WORLD, &world_group);
 
-    n = MPI_MASTER_THREAD - MPI_FIRST_CPU + 1;
+    n = MPI_MASTER_THREAD - MPI_FIRST_OFF + 1;
     for (int i = 0; i < n; i++) {
-        ranks.push_back(MPI_FIRST_CPU + i);
+        ranks.push_back(MPI_FIRST_OFF + i);
         std::cout << ranks[i] << ", ";
     }
     std::cout << std::endl;
 
-    MPI_Group cpu_group;
-    MPI_Group_incl(world_group, n, ranks.data(), &cpu_group);
-    MPI_Comm CPU_comm;
-    MPI_Comm_create_group(MPI_COMM_WORLD, cpu_group, 0, &CPU_comm);
+    MPI_Group off_group;
+    MPI_Group_incl(world_group, n, ranks.data(), &off_group);
+    MPI_Comm OFF_comm;
+    MPI_Comm_create_group(MPI_COMM_WORLD, off_group, 0, &OFF_comm);
 
     if (mpi_id == MPI_SCHEDULER) {
 
         std::cout << std::endl;
         std::cout << "##### cluster #####" << std::endl;
         std::cout << "# SCHED node " << MPI_SCHEDULER << "    #" << std::endl;
-        std::cout << "# CPU nodes [" << MPI_MASTER_THREAD << ","
-                  << MPI_FIRST_CPU << "] #" << std::endl;
-        std::cout << "# WRK nodes [" << MPI_FIRST_CPU - 1 << ",0] #"
+        std::cout << "# OFF nodes [" << MPI_MASTER_THREAD << ","
+                  << MPI_FIRST_OFF << "] #" << std::endl;
+        std::cout << "# WRK nodes [" << MPI_FIRST_OFF - 1 << ",0] #"
                   << std::endl;
         std::cout << "###################" << std::endl;
         std::cout << std::endl;
 
-        scheduler = new Scheduler(MPI_FIRST_CPU);
+        scheduler = new Scheduler(MPI_FIRST_OFF);
         scheduler->manage_connections();
 
-    } else if (mpi_id >= MPI_FIRST_CPU) { // offloader nodes
+    } else if (mpi_id >= MPI_FIRST_OFF) { // offloader nodes
 
         std::vector<Offloader> offloaders;
         offloaders.push_back(Offloader(0, mpi_id, true, "binary_search"));
@@ -333,12 +333,12 @@ int main(int argc, char *argv[]) {
         tbb::parallel_for_each(offloaders.begin(), offloaders.end(),
                                [&](Offloader &p) { p(); });
 
-        MPI_Barrier(CPU_comm);
+        MPI_Barrier(OFF_comm);
         // Now stop all the Worker nodes
         if (mpi_id == MPI_MASTER_THREAD) {
             std::cout << "\t"
                       << "MST: Exited from tbb::parallel_for_each" << std::endl;
-            for (int i = 0; i < MPI_FIRST_CPU; i++) {
+            for (int i = 0; i < MPI_FIRST_OFF; i++) {
                 std::cout << "\t"
                           << "MST: Send exit tag to " << i << std::endl;
                 MPI_Send(0, 0, MPI_INT, i, DIETAG, MPI_COMM_WORLD);
