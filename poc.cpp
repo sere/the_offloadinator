@@ -109,7 +109,7 @@ class Scheduler {
 Scheduler *scheduler;
 
 /* Create and send a task to a Worker */
-struct Offloader {
+class Offloader {
   private:
     int id_;
     int mpi_id_;
@@ -121,7 +121,7 @@ struct Offloader {
                   << "OFF " << mpi_id_ << "-" << id_
                   << ": task executing on offloader" << std::endl;
     }
-    int get_node() {
+    int get_worker() {
         int node;
         MPI_Status status;
         MPI_Send(NULL, 0, MPI_INT, MPI_SCHEDULER, SCHED_REQ + id_,
@@ -147,7 +147,7 @@ struct Offloader {
     bool operator()() {
         if (offloadable_) {
 
-            int wrk_pe = get_node();
+            int wrk_pe = get_worker();
 
             if (wrk_pe == -1) { // No Worker is available right now
                 std::cout << "\t"
@@ -185,15 +185,14 @@ struct Offloader {
     }
 };
 
-struct Worker {
+class Worker {
   private:
     int id_;
-    int pool_size_;
     int mpi_id_;
     int gpu_total_;
     int gpu_available_;
 
-    void update_available_gpu(int gpus) {
+    void update_gpu_count(int gpus) {
         assert(gpus <= gpu_total_ && gpus >= 0);
         std::cout << "\t\t"
                   << "WRK " << mpi_id_ << ": update available GPUs from "
@@ -210,9 +209,8 @@ struct Worker {
     }
 
   public:
-    Worker(int id, int pool_size, int mpi_id) {
+    Worker(int id, int mpi_id) {
         id_ = id;
-        pool_size_ = pool_size;
         mpi_id_ = mpi_id;
         gpu_total_ = std::rand() % 4 + 1;
         gpu_available_ = gpu_total_;
@@ -248,7 +246,7 @@ struct Worker {
             std::cout << "\t\t"
                       << "WRK " << mpi_id_ << " received work " << rec_buf
                       << " from node " << status.MPI_SOURCE << std::endl;
-            update_available_gpu(gpu_available_ - 1);
+            update_gpu_count(gpu_available_ - 1);
             MPI_Send(0, 0, MPI_INT, status.MPI_SOURCE, status.MPI_TAG,
                      MPI_COMM_WORLD);
             std::this_thread::sleep_for(
@@ -257,7 +255,7 @@ struct Worker {
                       << "WRK " << mpi_id_ << " sent answer to node "
                       << status.MPI_SOURCE << " tag " << status.MPI_TAG
                       << std::endl;
-            update_available_gpu(gpu_available_ + 1);
+            update_gpu_count(gpu_available_ + 1);
             send_wrk_info();
         }
     }
@@ -353,8 +351,8 @@ int main(int argc, char *argv[]) {
     } else { // Worker nodes
 
         std::vector<Worker> workers;
-        workers.push_back(Worker(0, 2, mpi_id));
-        workers.push_back(Worker(1, 2, mpi_id));
+        workers.push_back(Worker(0, mpi_id));
+        workers.push_back(Worker(1, mpi_id));
 
         tbb::parallel_for_each(workers.begin(), workers.end(),
                                [&](Worker &c) { c(); });
