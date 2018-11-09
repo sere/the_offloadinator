@@ -26,44 +26,44 @@ int MPI_FIRST_CPU;
 
 class Scheduler {
   private:
-    int n_gpu_nodes_;
-    std::map<const int, int> gpu_nodes_;
+    int n_wrk_nodes_;
+    std::map<const int, int> wrk_nodes_;
     tbb::mutex m_;
 
     void print_state() {
         std::cout << "**** SCHED state ****" << std::endl;
-        for (auto e : gpu_nodes_)
+        for (auto e : wrk_nodes_)
             std::cout << "* node " << e.first << " has " << e.second
-                      << " GPUs *" << std::endl;
+                      << " WRKs *" << std::endl;
         std::cout << "*********************" << std::endl;
     }
     int use_node() {
         int k;
-        auto it = gpu_nodes_.begin();
-        if (it != gpu_nodes_.end()) {
+        auto it = wrk_nodes_.begin();
+        if (it != wrk_nodes_.end()) {
             k = it->first;
-            gpu_nodes_[k]--;
-            if (gpu_nodes_[k] == 0) {
+            wrk_nodes_[k]--;
+            if (wrk_nodes_[k] == 0) {
                 std::cout << "SCHED erasing node " << k << std::endl;
-                gpu_nodes_.erase(k);
+                wrk_nodes_.erase(k);
             }
         } else {
             k = -1;
         }
         return k;
     }
-    void update_node(int *nodeinfo) { gpu_nodes_[nodeinfo[0]] = nodeinfo[1]; }
+    void update_node(int *nodeinfo) { wrk_nodes_[nodeinfo[0]] = nodeinfo[1]; }
 
   public:
-    Scheduler(int n_gpu_nodes) {
-        n_gpu_nodes_ = n_gpu_nodes;
+    Scheduler(int n_wrk_nodes) {
+        n_wrk_nodes_ = n_wrk_nodes;
         int nodeinfo[2];
 
-        for (int i = 0; i <= n_gpu_nodes_ - 1; i++) {
+        for (int i = 0; i <= n_wrk_nodes_ - 1; i++) {
             MPI_Recv((void *)nodeinfo, 2, MPI_INT, i, SCHED_UPD, MPI_COMM_WORLD,
                      MPI_STATUS_IGNORE);
             assert(i == nodeinfo[0]);
-            gpu_nodes_[i] = nodeinfo[1];
+            wrk_nodes_[i] = nodeinfo[1];
         }
     }
     void manage_connections() {
@@ -91,7 +91,7 @@ class Scheduler {
                 MPI_Mrecv((void *)nodeinfo, 2, MPI_INT, &message, &status);
                 std::cout << "SCHED update node " << nodeinfo[0] << "-"
                           << status.MPI_TAG % SCHED_REQ << " from "
-                          << gpu_nodes_[nodeinfo[0]] << " to " << nodeinfo[1]
+                          << wrk_nodes_[nodeinfo[0]] << " to " << nodeinfo[1]
                           << std::endl;
                 update_node(nodeinfo);
             } else if (status.MPI_TAG / SCHED_DIE == 1) {
@@ -128,7 +128,7 @@ struct Offloader {
                  MPI_COMM_WORLD);
         std::cout << "\t"
                   << "CPU " << mpi_id_ << "-" << id_
-                  << ": Sent request for gpu node to scheduler " << std::endl;
+                  << ": Sent request for worker node to scheduler " << std::endl;
         MPI_Recv(&node, 1, MPI_INT, MPI_SCHEDULER, SCHED_REQ + id_,
                  MPI_COMM_WORLD, &status);
         std::cout << "\t"
@@ -147,32 +147,32 @@ struct Offloader {
     bool operator()() {
         if (offloadable_) {
 
-            int gpu_pe = get_node();
+            int wrk_pe = get_node();
 
-            if (gpu_pe == -1) { // No GPU is available right now
+            if (wrk_pe == -1) { // No Worker is available right now
                 std::cout << "\t"
                           << "CPU " << mpi_id_ << "-" << id_
-                          << ": No GPU available, executing task on CPU"
+                          << ": No Worker available, executing task on CPU"
                           << std::endl;
                 function();
                 return false;
             }
             std::cout << "\t"
                       << "CPU " << mpi_id_ << "-" << id_ << ": Sending "
-                      << name_ << " to node " << gpu_pe << std::endl;
-            MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, gpu_pe,
+                      << name_ << " to node " << wrk_pe << std::endl;
+            MPI_Send((void *)name_.c_str(), name_.size() + 1, MPI_CHAR, wrk_pe,
                      WORKTAG + id_ * 4 + mpi_id_, MPI_COMM_WORLD);
             std::cout << "\t"
                       << "CPU " << mpi_id_ << "-" << id_ << ": Sent " << name_
-                      << " to node " << gpu_pe << " tag " << WORKTAG + id_
+                      << " to node " << wrk_pe << " tag " << WORKTAG + id_
                       << std::endl;
 
             MPI_Status status;
-            MPI_Recv(0, 0, MPI_INT, gpu_pe, WORKTAG + id_ * 4 + mpi_id_,
+            MPI_Recv(0, 0, MPI_INT, wrk_pe, WORKTAG + id_ * 4 + mpi_id_,
                      MPI_COMM_WORLD, &status);
             std::cout << "\t"
                       << "CPU " << mpi_id_ << "-" << id_
-                      << ": Received answer from " << gpu_pe << " tag "
+                      << ": Received answer from " << wrk_pe << " tag "
                       << WORKTAG + id_ << std::endl;
 
             /* do other work */
@@ -196,14 +196,14 @@ struct Worker {
     void update_available_gpu(int gpus) {
         assert(gpus <= gpu_total_ && gpus >= 0);
         std::cout << "\t\t"
-                  << "GPU " << mpi_id_ << ": update available gpus from "
+                  << "WRK " << mpi_id_ << ": update available GPUs from "
                   << gpu_available_ << " to " << gpus << std::endl;
         gpu_available_ = gpus;
     }
-    void send_gpu_info() {
+    void send_wrk_info() {
         int nodeinfo[2] = {mpi_id_, gpu_available_};
         std::cout << "\t\t"
-                  << "GPU " << mpi_id_ << " updating available gpu to "
+                  << "WRK " << mpi_id_ << " updating available GPUs to "
                   << gpu_available_ << std::endl;
         MPI_Send((void *)nodeinfo, 2, MPI_INT, MPI_SCHEDULER, SCHED_UPD + id_,
                  MPI_COMM_WORLD);
@@ -216,7 +216,7 @@ struct Worker {
         mpi_id_ = mpi_id;
         gpu_total_ = std::rand() % 4 + 1;
         gpu_available_ = gpu_total_;
-        send_gpu_info();
+        send_wrk_info();
     }
     void operator()() {
 
@@ -226,11 +226,11 @@ struct Worker {
 
         while (id_ == 0) {
             std::cout << "\t\t"
-                      << "GPU " << mpi_id_ << " probing for work" << std::endl;
+                      << "WRK " << mpi_id_ << " probing for work" << std::endl;
             MPI_Mprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &message,
                        &status);
             std::cout << "\t\t"
-                      << "GPU " << mpi_id_ << " probed tag " << status.MPI_TAG
+                      << "WRK " << mpi_id_ << " probed tag " << status.MPI_TAG
                       << " from node " << status.MPI_SOURCE << std::endl;
 
             MPI_Get_count(&status, MPI_CHAR, &count);
@@ -241,12 +241,12 @@ struct Worker {
 
             if (status.MPI_TAG == DIETAG) {
                 std::cout << "\t\t"
-                          << "GPU " << mpi_id_ << " exiting " << std::endl;
+                          << "WRK " << mpi_id_ << " exiting " << std::endl;
                 return;
             }
 
             std::cout << "\t\t"
-                      << "GPU " << mpi_id_ << " received work " << rec_buf
+                      << "WRK " << mpi_id_ << " received work " << rec_buf
                       << " from node " << status.MPI_SOURCE << std::endl;
             update_available_gpu(gpu_available_ - 1);
             MPI_Send(0, 0, MPI_INT, status.MPI_SOURCE, status.MPI_TAG,
@@ -254,11 +254,11 @@ struct Worker {
             std::this_thread::sleep_for(
                 std::chrono::milliseconds((std::rand() % 100 + 1) * 10));
             std::cout << "\t\t"
-                      << "GPU " << mpi_id_ << " sent answer to node "
+                      << "WRK " << mpi_id_ << " sent answer to node "
                       << status.MPI_SOURCE << " tag " << status.MPI_TAG
                       << std::endl;
             update_available_gpu(gpu_available_ + 1);
-            send_gpu_info();
+            send_wrk_info();
         }
     }
 };
@@ -314,7 +314,7 @@ int main(int argc, char *argv[]) {
         std::cout << "# SCHED node " << MPI_SCHEDULER << "    #" << std::endl;
         std::cout << "# CPU nodes [" << MPI_MASTER_THREAD << ","
                   << MPI_FIRST_CPU << "] #" << std::endl;
-        std::cout << "# GPU nodes [" << MPI_FIRST_CPU - 1 << ",0] #"
+        std::cout << "# WRK nodes [" << MPI_FIRST_CPU - 1 << ",0] #"
                   << std::endl;
         std::cout << "###################" << std::endl;
         std::cout << std::endl;
@@ -334,7 +334,7 @@ int main(int argc, char *argv[]) {
                                [&](Offloader &p) { p(); });
 
         MPI_Barrier(CPU_comm);
-        // Now stop all the GPU nodes
+        // Now stop all the Worker nodes
         if (mpi_id == MPI_MASTER_THREAD) {
             std::cout << "\t"
                       << "MST: Exited from tbb::parallel_for_each" << std::endl;
@@ -346,11 +346,11 @@ int main(int argc, char *argv[]) {
             // Stop the scheduler
             // this instruction order is the only guarantee that the scheduler
             // is exiting after the computation (blocking send for stopping
-            // gpus)
+            // Workers)
             MPI_Send(0, 0, MPI_INT, MPI_SCHEDULER, SCHED_DIE, MPI_COMM_WORLD);
         }
 
-    } else { // worker nodes
+    } else { // Worker nodes
 
         std::vector<Worker> workers;
         workers.push_back(Worker(0, 2, mpi_id));
